@@ -1,48 +1,78 @@
-// Warning Label for Humans: one line, printed on every human being.
-// The grader runs this file and the sealed scorer reads /output/entry.txt,
-// so all this script does is carry the single line from line.txt into
-// that file, after proving it obeys the gate: one line, 1-160 characters,
-// not only white space. The output is left world-readable (0644) because
-// the grader collects it as a different user than the one running here.
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// Warning label for humans: one line, big laugh.
+//
+// This script carries the single sealed line from line.txt to
+// <output>/entry.txt. It is deliberately split into small stages so each
+// gate rule can be checked and reported on its own: read the source,
+// pick out the one line, check it against the gate, write it out, then
+// read the written file back and prove it matches byte for byte.
+// The output stays world-readable (0644) because the scorer may collect
+// it as a different user.
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const LIMIT = 160;
-const HERE = dirname(fileURLToPath(import.meta.url));
+const MAX_CHARS = 160;
+const SOURCE_FILE = "line.txt";
+const TARGET_FILE = "entry.txt";
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
-function loadLine(): string {
-  const raw = readFileSync(join(HERE, "line.txt"), "utf8");
-  const clean = raw.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
-  const lines = clean.split("\n").map((part) => part.trim()).filter(Boolean);
-  if (lines.length !== 1) {
-    throw new Error(`expected exactly one non-empty line in line.txt, found ${lines.length}`);
-  }
-  return lines[0];
+type GateProblem = string;
+
+function readSourceText(): string {
+  const raw = readFileSync(join(SCRIPT_DIR, SOURCE_FILE), "utf8");
+  return raw.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 }
 
-function gate(line: string): void {
-  const chars = [...line];
-  if (chars.length < 1 || chars.length > LIMIT) {
-    throw new Error(`entry must be 1-${LIMIT} characters, got ${chars.length}`);
+function extractSingleLine(text: string): string {
+  const candidates = text.split("\n").map((part) => part.trim()).filter((part) => part.length > 0);
+  if (candidates.length !== 1) {
+    throw new Error(`line.txt must hold exactly one non-empty line, found ${candidates.length}`);
+  }
+  return candidates[0];
+}
+
+function checkGate(line: string): GateProblem[] {
+  const problems: GateProblem[] = [];
+  const count = [...line].length;
+  if (count < 1 || count > MAX_CHARS) {
+    problems.push(`length ${count} is outside the 1-${MAX_CHARS} character gate`);
   }
   if (line.trim().length === 0) {
-    throw new Error("entry must not be only white space");
+    problems.push("line is only white space");
   }
-  if (/\n/.test(line) || /[\u0000-\u001F]/.test(line)) {
-    throw new Error("entry must be a single line with no control characters");
+  if (line.includes("\n") || /[\u0000-\u001F]/.test(line)) {
+    problems.push("line must be a single line with no control characters");
   }
+  return problems;
 }
 
-function main(): void {
-  const line = loadLine();
-  gate(line);
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+function resolveOutputDir(): string {
+  const configured = process.env.MAKEFUN_OUTPUT_DIR;
+  return configured !== undefined && configured !== "" ? configured : "/output";
+}
+
+function persistEntry(line: string, outDir: string): string {
   mkdirSync(outDir, { recursive: true });
-  const outPath = join(outDir, "entry.txt");
-  writeFileSync(outPath, line, "utf8");
+  const outPath = join(outDir, TARGET_FILE);
+  const tmpPath = `${outPath}.tmp-${process.pid}`;
+  writeFileSync(tmpPath, line, "utf8");
+  renameSync(tmpPath, outPath);
   chmodSync(outPath, 0o644);
+  const writtenBack = readFileSync(outPath, "utf8");
+  if (writtenBack !== line) {
+    throw new Error("read-back check failed: entry.txt does not match the gated line");
+  }
+  return outPath;
+}
+
+function run(): void {
+  const line = extractSingleLine(readSourceText());
+  const problems = checkGate(line);
+  if (problems.length > 0) {
+    throw new Error(`gate failed: ${problems.join("; ")}`);
+  }
+  const outPath = persistEntry(line, resolveOutputDir());
   console.log(`wrote ${[...line].length} characters to ${outPath}`);
 }
 
-main();
+run();
